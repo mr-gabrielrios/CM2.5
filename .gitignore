@@ -3,4 +3,7 @@
 !/.gitignore
 !/README.md
 !/src/
+
+/exp/
+!/exp/exec*
 *.out*
