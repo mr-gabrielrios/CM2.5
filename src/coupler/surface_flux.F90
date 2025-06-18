@@ -1,27 +1,32 @@
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!!                                                                   !!
-!!                   GNU General Public License                      !!
-!!                                                                   !!
-!! This file is part of the Flexible Modeling System (FMS).          !!
-!!                                                                   !!
-!! FMS is free software; you can redistribute it and/or modify it    !!
-!! under the terms of the GNU General Public License as published by !!
-!! the Free Software Foundation, either version 3 of the License, or !!
-!! (at your option) any later version.                               !!
-!!                                                                   !!
-!! FMS is distributed in the hope that it will be useful,            !!
-!! but WITHOUT ANY WARRANTY; without even the implied warranty of    !!
-!! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the      !!
-!! GNU General Public License for more details.                      !!
-!!                                                                   !!
-!! You should have received a copy of the GNU General Public License !!
-!! along with FMS. if not, see: http://www.gnu.org/licenses/gpl.txt  !!
-!!                                                                   !!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
+! ============================================================================
+!WY 2023-01-05: option to kill TC by capping evap wind speed over warm sst
 module surface_flux_mod
+!-----------------------------------------------------------------------
+!                   GNU General Public License                        
+!                                                                      
+! This program is free software; you can redistribute it and/or modify it and  
+! are expected to follow the terms of the GNU General Public License  
+! as published by the Free Software Foundation; either version 2 of   
+! the License, or (at your option) any later version.                 
+!                                                                      
+! MOM is distributed in the hope that it will be useful, but WITHOUT    
+! ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  
+! or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    
+! License for more details.                                           
+!                                                                      
+! For the full text of the GNU General Public License,                
+! write to: Free Software Foundation, Inc.,                           
+!           675 Mass Ave, Cambridge, MA 02139, USA.                   
+! or see:   http://www.gnu.org/licenses/gpl.html                      
+!-----------------------------------------------------------------------
 !
-! <CONTACT EMAIL="GFDL.Climate.Model.Info@noaa.gov">GFDL </CONTACT>
+! <CONTACT EMAIL="Stephen.Klein@noaa.gov">Steve Klein  </CONTACT>
+! <CONTACT EMAIL="Isaac.Held@noaa.gov"> Isaac Held </CONTACT>
+! <CONTACT EMAIL="Bruce.Wyman@noaa.gov"> Bruce Wyman </CONTACT >
+
+! <REVIEWER EMAIL="V.Balaji@noaa.gov"> V. Balaji </REVIEWER>
+! <REVIEWER EMAIL="Sergey.Malyshev@noaa.gov"> Sergey Malyshev </REVIEWER>
+! <REVIEWER EMAIL="Elena.Shevliakova@noaa.gov"> Elena Shevliakova </REVIEWER>
 !
 ! <HISTORY SRC="http://www.gfdl.noaa.gov/fms-cgi-bin/cvsweb.cgi/FMS/"/>
 !
@@ -188,14 +193,14 @@ public  surface_flux
 interface surface_flux
 !    module procedure surface_flux_0d
     module procedure surface_flux_1d
-    module procedure surface_flux_2d  
+!    module procedure surface_flux_2d  
 end interface
 ! </INTERFACE>
 
 !-----------------------------------------------------------------------
 
-character(len=*), parameter :: version = '$Id$'
-character(len=*), parameter :: tagname = '$Name$'
+character(len=*), parameter :: version = '$Id: surface_flux.F90,v 18.0.4.1 2010/08/31 14:38:01 z1l Exp $'
+character(len=*), parameter :: tagname = '$Name: hiram_20101115_bw $'
    
 logical :: do_init = .true.
 
@@ -265,7 +270,16 @@ logical :: ncar_ocean_flux       = .false.
 logical :: ncar_ocean_flux_orig  = .false. ! for backwards compatibility 
 logical :: raoult_sat_vap        = .false.
 logical :: do_simple             = .false.
-
+!WY: parameters used to kill TC by capping evap windspeed at w_cddt where
+!sst > sst_cddt. No cap where sst < sst_cddt - dsst_ddt. Taper in between.
+logical :: suppress_flux_q       = .false. ! GR: enables suppression of evaporative flux (flux_q) under TC conditions
+logical :: suppress_flux_t       = .false. ! GR: enables suppression of sensible flux (flux_t) under TC conditions
+real    :: w_cddt                = 10.0 !WY: critical wind threshold in evap cap
+real    :: wcap_cddt             = 12.0 !WY: critical wind threshold in evap cap, windspeed capped if >w_cddt and <w0_cddt
+real    :: w0_cddt               = 15.0 !WY: critical wind threshold in evap cap, windspeed=0 if >=w0_cddt
+real    :: wmin_ddt              = 0.0 !WY: minimum w_atm to be set if>w0_cddt
+real    :: sst_cddt              = 25.0 !WY: critical sst threshold in evap cap
+real    :: dsst_ddt              = 1.0 !WY: sst taper width in evap cap
 
 namelist /surface_flux_nml/ no_neg_q,             &
                             use_virtual_temp,     &
@@ -277,7 +291,15 @@ namelist /surface_flux_nml/ no_neg_q,             &
                             ncar_ocean_flux,      &
                             ncar_ocean_flux_orig, &
                             raoult_sat_vap,       &
-                            do_simple       
+                            do_simple,            &
+                            suppress_flux_q,      &
+                            suppress_flux_t,      &
+                            w_cddt,               &
+                            wcap_cddt,            &
+                            w0_cddt,              &
+                            wmin_ddt,             &
+                            sst_cddt,             &
+                            dsst_ddt
    
 
 
@@ -335,12 +357,13 @@ subroutine surface_flux_1d (                                           &
      p_surf,    t_surf,     t_ca,      q_surf,                         &
      u_surf,    v_surf,                                                &
      rough_mom, rough_heat, rough_moist, rough_scale, gust,            &
+     vort850, rh500, rh700, rh850, swfq,                        &
      flux_t, flux_q, flux_r, flux_u, flux_v,                           &
      cd_m,      cd_t,       cd_q,                                      &
      w_atm,     u_star,     b_star,     q_star,                        &
      dhdt_surf, dedt_surf,  dedq_surf,  drdt_surf,                     &
      dhdt_atm,  dedq_atm,   dtaudu_atm, dtaudv_atm,                    &
-     dt,        land,      seawater,     avail  )
+     dt,        land,      seawater,     avail)
 !</PUBLICROUTINE>
 !  slm Mar 28 2002 -- remove agument drag_q since it is just cd_q*wind
 ! ============================================================================
@@ -350,14 +373,15 @@ subroutine surface_flux_1d (                                           &
        t_atm,     q_atm_in,   u_atm,     v_atm,              &
        p_atm,     z_atm,      t_ca,                          &
        p_surf,    t_surf,     u_surf,    v_surf,  &
-       rough_mom, rough_heat, rough_moist,  rough_scale, gust
+       rough_mom, rough_heat, rough_moist,  rough_scale, gust, &
+       vort850, rh500, rh700, rh850 
   real, intent(out), dimension(:) :: &
        flux_t,    flux_q,     flux_r,    flux_u,  flux_v,    &
        dhdt_surf, dedt_surf,  dedq_surf, drdt_surf,          &
        dhdt_atm,  dedq_atm,   dtaudu_atm,dtaudv_atm,         &
        w_atm,     u_star,     b_star,    q_star,             &
        cd_m,      cd_t,       cd_q
-  real, intent(inout), dimension(:) :: q_surf
+  real, intent(inout), dimension(:) :: q_surf, swfq
   real, intent(in) :: dt
 
   ! ---- local constants -----------------------------------------------------
@@ -371,8 +395,17 @@ subroutine surface_flux_1d (                                           &
        t_surf0,  t_surf1,  u_dif,     v_dif,               &
        rho_drag, drag_t,    drag_m,   drag_q,    rho,      &
        q_atm,    q_surf0,  dw_atmdu,  dw_atmdv,  w_gust
+  real, dimension(size(vort850(:))) :: &
+       rh500_weighted, rh700_weighted,     &
+       rh850_weighted, vort850_weighted, es_thresh
 
   integer :: i, nbad
+  ! GR: addition of local variables relevant to flux suppression
+  logical, dimension(size(avail)) :: avail_SWISHE !< .TRUE. when the SWISHE namelist option is enabled (`suppress_flux_q`), .FALSE. otherwise
+  real, dimension(size(t_atm(:))) :: alpha !!WY: weight used in kill_tc taper
+  real, dimension(size(t_atm(:))) :: w_atm_q !!WY: modified w_atm used in drag_q
+  alpha = 0.0 !WY: default is 0
+  w_atm_q = 0 !WY:
 
 
   if (do_init) call surface_flux_init
@@ -477,15 +510,67 @@ subroutine surface_flux_1d (                                           &
     call  ncar_ocean_fluxes (w_atm, th_atm, t_surf0, q_atm, q_surf0, z_atm, &
                              seawater, cd_m, cd_t, cd_q, u_star, b_star     )
   end if
-
+  
+  rh500_weighted      = merge(0.5, 0.0, (rh500 .ge. 60))
+  rh700_weighted      = merge(1.0, 0.0, (rh700 .ge. 70))
+  rh850_weighted      = merge(1.0, 0.0, (rh850 .ge. 75))
+  vort850_weighted    = merge(0.5, 0.0, (abs(vort850) .ge. 1e-4))
+  do i = 1, size(rh500_weighted)
+      es_thresh(i)    = rh500_weighted(i) + rh700_weighted(i) &
+                        + rh850_weighted(i) + vort850_weighted(i) 
+  enddo
+        
+  ! Initialize SWISHE value
+  swfq = 0.
+  ! Set `avail_SWISHE` to .TRUE. if `suppress_flux_q` or `suppress_flux_t` enabled. 
+  ! Else, make .FALSE.
+  if (suppress_flux_q .or. suppress_flux_t) then
+      avail_SWISHE = .true.
+  else
+      avail_SWISHE = .false.
+  end if
+  
   where (avail)
-     ! scale momentum drag coefficient on orographic roughness
+  
+    ! scale momentum drag coefficient on orographic roughness
      cd_m = cd_m*(log(z_atm/rough_mom+1)/log(z_atm/rough_scale+1))**2
      ! surface layer drag coefficients
      drag_t = cd_t * w_atm
-     drag_q = cd_q * w_atm
      drag_m = cd_m * w_atm
 
+     ! Apply suppression where the threshold is exceeded
+     where (avail_SWISHE .and. (es_thresh .ge. 2.5))
+         !WY: first get the w_atm_q
+         where(w_atm>w0_cddt)
+             w_atm_q = wmin_ddt !WY: set to wmin_ddt if very strong wind speed (>w0_cddt)
+             swfq = 1
+         elsewhere(w_atm>wcap_cddt)
+             !WY: linearly decreases to 0 if w_atm between wcap_cddt and w0_cddt
+             w_atm_q = w_cddt - (w_atm - wcap_cddt)*(w_cddt - wmin_ddt)/(w0_cddt - wcap_cddt)
+         elsewhere(w_atm>w_cddt)
+             w_atm_q = w_cddt !WY: constant if w_atm between w_cddt and wcap_cddt
+         elsewhere
+             w_atm_q = w_atm !WY: w_atm if w_atm<w_cddt
+         endwhere
+
+         ! Obtain SWISHE application frequency based on fraction of winds suppressed
+         swfq = 1 - w_atm_q/w_atm
+
+         !WY: second, apply to warm SSTs
+         where((t_surf0 - 273.15 - sst_cddt) .ge. 0)
+             !WY: warm sst grids cap the evap wind speed
+             !drag_q = cd_q * min(w_cddt, w_atm)
+             !WY: apply w_atm_q to warm SSTs
+             drag_q = cd_q * w_atm_q
+         elsewhere
+             swfq = 0 ! set SWISHE application to 0 since it's not applied
+             drag_q = cd_q * w_atm !WY: cold sst grids use the default w_atm
+         endwhere
+     elsewhere
+         drag_q = cd_q * w_atm !WY: model's default over non-seawater grids
+     endwhere
+     ! End SWISHE flux suppression conditional
+     
      ! density
      rho = p_atm / (rdgas * tv_atm)  
 
@@ -540,7 +625,9 @@ subroutine surface_flux_1d (                                           &
      q_star     = 0.0
      q_surf     = 0.0
      w_atm      = 0.0
+
   endwhere
+  
 
   ! calculate d(stress component)/d(atmos wind component)
   dtaudu_atm = 0.0
@@ -572,7 +659,8 @@ subroutine surface_flux_0d (                                                 &
      w_atm_0,     u_star_0,     b_star_0,     q_star_0,                      &
      dhdt_surf_0, dedt_surf_0,  dedq_surf_0,  drdt_surf_0,                   &
      dhdt_atm_0,  dedq_atm_0,   dtaudu_atm_0, dtaudv_atm_0,                  &
-     dt,          land_0,       seawater_0,  avail_0  )
+     dt,          land_0,       seawater_0,  avail_0,                        &
+     vort850_0, rh500_0, rh700_0, rh850_0, swfq_0)
 
   ! ---- arguments -----------------------------------------------------------
   logical, intent(in) :: land_0,  seawater_0, avail_0
@@ -580,14 +668,15 @@ subroutine surface_flux_0d (                                                 &
        t_atm_0,     q_atm_0,      u_atm_0,     v_atm_0,                &
        p_atm_0,     z_atm_0,      t_ca_0,                              &
        p_surf_0,    t_surf_0,     u_surf_0,    v_surf_0,               &
-       rough_mom_0, rough_heat_0, rough_moist_0, rough_scale_0, gust_0
+       rough_mom_0, rough_heat_0, rough_moist_0, rough_scale_0, gust_0, &
+       vort850_0, rh500_0, rh700_0, rh850_0
   real, intent(out) ::                                                 &
        flux_t_0,    flux_q_0,     flux_r_0,    flux_u_0,  flux_v_0,    &
        dhdt_surf_0, dedt_surf_0,  dedq_surf_0, drdt_surf_0,            &
        dhdt_atm_0,  dedq_atm_0,   dtaudu_atm_0,dtaudv_atm_0,           &
        w_atm_0,     u_star_0,     b_star_0,    q_star_0,               &
        cd_m_0,      cd_t_0,       cd_q_0
-  real, intent(inout) :: q_surf_0
+  real, intent(inout) :: q_surf_0, swfq_0
   real, intent(in)    :: dt
 
   ! ---- local vars ----------------------------------------------------------
@@ -596,7 +685,8 @@ subroutine surface_flux_0d (                                                 &
        t_atm,     q_atm,      u_atm,     v_atm,              &
        p_atm,     z_atm,      t_ca,                          &
        p_surf,    t_surf,     u_surf,    v_surf,             &
-       rough_mom, rough_heat, rough_moist,  rough_scale, gust
+       rough_mom, rough_heat, rough_moist,  rough_scale, gust, &
+       vort850, rh500, rh700, rh850, swfq
   real, dimension(1) :: &
        flux_t,    flux_q,     flux_r,    flux_u,  flux_v,    &
        dhdt_surf, dedt_surf,  dedq_surf, drdt_surf,          &
@@ -628,18 +718,24 @@ subroutine surface_flux_0d (                                                 &
   land(1)        = land_0
   seawater(1)    = seawater_0
   avail(1)       = avail_0
+  rh500(1)       = rh500_0
+  rh700(1)       = rh700_0
+  rh850(1)       = rh850_0
+  vort850(1)     = vort850_0
+  swfq(1)        = swfq_0
 
   call surface_flux_1d (                                                 &
        t_atm,     q_atm,      u_atm,     v_atm,     p_atm,     z_atm,    &
        p_surf,    t_surf,     t_ca,      q_surf,                         &
        u_surf,    v_surf,                                                &
        rough_mom, rough_heat, rough_moist, rough_scale, gust,            &
+       vort850, rh500, rh700, rh850, swfq,                        &
        flux_t, flux_q, flux_r, flux_u, flux_v,                           &
        cd_m,      cd_t,       cd_q,                                      &
        w_atm,     u_star,     b_star,     q_star,                        &
        dhdt_surf, dedt_surf,  dedq_surf,  drdt_surf,                     &
        dhdt_atm,  dedq_atm,   dtaudu_atm, dtaudv_atm,                    &
-       dt,        land,      seawater, avail  )
+       dt,        land,      seawater, avail)
 
   flux_t_0     = flux_t(1)
   flux_q_0     = flux_q(1)
@@ -675,7 +771,8 @@ subroutine surface_flux_2d (                                           &
      w_atm,     u_star,     b_star,     q_star,                        &
      dhdt_surf, dedt_surf,  dedq_surf,  drdt_surf,                     &
      dhdt_atm,  dedq_atm,   dtaudu_atm, dtaudv_atm,                    &
-     dt,        land,       seawater,  avail  )
+     dt,        land,       seawater,  avail,                          &
+     vort850, rh500, rh700, rh850, swfq )
 
   ! ---- arguments -----------------------------------------------------------
   logical, intent(in), dimension(:,:) :: land,  seawater, avail
@@ -683,14 +780,15 @@ subroutine surface_flux_2d (                                           &
        t_atm,     q_atm_in,   u_atm,     v_atm,              &
        p_atm,     z_atm,      t_ca,                          &
        p_surf,    t_surf,     u_surf,    v_surf,             &
-       rough_mom, rough_heat, rough_moist, rough_scale, gust
+       rough_mom, rough_heat, rough_moist, rough_scale, gust, &
+       vort850, rh500, rh700, rh850
   real, intent(out), dimension(:,:) :: &
        flux_t,    flux_q,     flux_r,    flux_u,  flux_v,    &
        dhdt_surf, dedt_surf,  dedq_surf, drdt_surf,          &
        dhdt_atm,  dedq_atm,   dtaudu_atm,dtaudv_atm,         &
        w_atm,     u_star,     b_star,    q_star,             &
        cd_m,      cd_t,       cd_q
-  real, intent(inout), dimension(:,:) :: q_surf
+  real, intent(inout), dimension(:,:) :: q_surf, swfq
   real, intent(in) :: dt
 
   ! ---- local vars -----------------------------------------------------------
@@ -702,12 +800,13 @@ subroutine surface_flux_2d (                                           &
           p_surf(:,j),    t_surf(:,j),     t_ca(:,j),      q_surf(:,j),                                   &
           u_surf(:,j),    v_surf(:,j),                                                                    &
           rough_mom(:,j), rough_heat(:,j), rough_moist(:,j), rough_scale(:,j), gust(:,j),                 &
+          vort850(:, j),  rh500(:, j), rh700(:, j), rh850(:, j), swfq(:, j),                  &
           flux_t(:,j),    flux_q(:,j),     flux_r(:,j),    flux_u(:,j),    flux_v(:,j),                   &
           cd_m(:,j),      cd_t(:,j),       cd_q(:,j),                                                     &
           w_atm(:,j),     u_star(:,j),     b_star(:,j),     q_star(:,j),                                  &
           dhdt_surf(:,j), dedt_surf(:,j),  dedq_surf(:,j),  drdt_surf(:,j),                               &
           dhdt_atm(:,j),  dedq_atm(:,j),   dtaudu_atm(:,j), dtaudv_atm(:,j),                              &
-          dt,             land(:,j),       seawater(:,j),  avail(:,j)  )
+          dt,             land(:,j),       seawater(:,j),  avail(:,j))  
   end do
 end subroutine surface_flux_2d
 
@@ -723,7 +822,6 @@ subroutine surface_flux_init
   ! read namelist
 #ifdef INTERNAL_FILE_NML
       read (input_nml_file, surface_flux_nml, iostat=io)
-      ierr = check_nml_error(io,'surface_flux_nml')
 #else
   if ( file_exist('input.nml')) then
      unit = open_namelist_file ()
@@ -752,8 +850,8 @@ end subroutine surface_flux_init
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 ! Over-ocean fluxes following Large and Yeager (used in NCAR models)           !
-! Original  code: GFDL.Climate.Model.Info@noaa.gov
-! Update Jul2007: GFDL.Climate.Model.Info@noaa.gov (ch and ce exchange coeff bugfix)  
+! Original  code: Michael.Winton@noaa.gov
+! Update Jul2007: Stephen.Griffies@noaa.gov (ch and ce exchange coeff bugfix)  
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !
 subroutine ncar_ocean_fluxes (u_del, t, ts, q, qs, z, avail, &
