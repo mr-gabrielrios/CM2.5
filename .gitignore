@@ -8,3 +8,4 @@
 !/exp/compile*
 !/exp/exec.AQP/
 *.out*
+.*.swp

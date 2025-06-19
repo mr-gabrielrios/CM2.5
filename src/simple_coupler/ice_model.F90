@@ -586,7 +586,10 @@ endif
  real               , intent(in)    :: glon_bnd(:,:), glat_bnd(:,:)
  type(domain2d), intent(in), target :: Atmos_domain
 
-real :: lon0, lond, latd, amp, t_control, dellon
+ real :: lon0, lond, latd, amp, t_control, dellon
+ ! GR: custom SST profile constants
+ real :: min_SST, max_SST, period, meridional_offset, root_min, root_max
+
  integer :: isg, ieg, jsg, jeg
  integer :: unit, ierr, io, i, j
  integer :: ndim, nvar, natt, ntime, nlon, nlat, mlon, mlat, layout(2)
@@ -632,6 +635,7 @@ real :: lon0, lond, latd, amp, t_control, dellon
        trim(sst_method) /= 'aqua_planet_6'  .and. &
        trim(sst_method) /= 'aqua_planet_7'  .and. &
        trim(sst_method) /= 'aqua_planet_8'  .and. &
+       trim(sst_method) /= 'aqua_planet_9'  .and. &
        trim(sst_method) /= 'mixed_layer'    .and. &               !miz
        trim(sst_method) /= 'mixed_layer_data' .and. &             !miz
        trim(sst_method) /= 'mixed_layer_merlis' .and. &             !tmm
@@ -902,6 +906,28 @@ endif
             Ice%t_surf = 27.*(1.-sin(max(min(1.5*Ice%lat,pi*0.5),-pi*0.5))**2) + TFREEZE + &
                          amp * cos(Ice%lon-lon0) * cos(0.5*pi*min(max(Ice%lat/latd,-1.),1.))**2
         endwhere
+    
+    ! GR: begin definition of custom SST profiles
+    else if (sst_method == "aqua_planet_9") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+
+        ! Constants for SST profile shift
+        min_SST = 0.
+        max_SST = 29. ! taken from HadISST zonal mean SST maximum, see hadisst_sst.clim.1986-2005.nc
+        period = 1.25
+        meridional_offset = 10 * pi / 180. ! convert from degrees to radians
+        root_min = (-(pi / 2) + meridional_offset) / period ! calculate minimum root (where SST = 0 degC)
+        root_max = ((pi / 2) + meridional_offset) / period ! calculate maximum root for filtering (where SST = 0 degC)
+       
+        do j = js, je
+            do i = is, ie
+                Ice%t_surf(i, j) = merge(max_SST * (1 - sin(period * Ice%lat(i, j) - meridional_offset)**4) + TFREEZE, & 
+                                         min_SST + TFREEZE, &
+                                         ((Ice%lat(i, j) .ge. root_min) .and. (Ice%lat(i, j) .le. root_max))) 
+            enddo
+        enddo
+
     endif
 
 
