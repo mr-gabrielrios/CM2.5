@@ -403,9 +403,10 @@ subroutine surface_flux_1d (                                           &
   ! GR: addition of local variables relevant to flux suppression
   logical, dimension(size(avail)) :: avail_SWISHE !< .TRUE. when the SWISHE namelist option is enabled (`suppress_flux_q`), .FALSE. otherwise
   real, dimension(size(t_atm(:))) :: alpha !!WY: weight used in kill_tc taper
-  real, dimension(size(t_atm(:))) :: w_atm_q !!WY: modified w_atm used in drag_q
+  real, dimension(size(t_atm(:))) :: w_atm_q, w_atm_t !!WY: modified w_atm used in drag_q
   alpha = 0.0 !WY: default is 0
   w_atm_q = 0 !WY:
+  w_atm_t = 0 !WY:
 
 
   if (do_init) call surface_flux_init
@@ -535,27 +536,25 @@ subroutine surface_flux_1d (                                           &
     ! scale momentum drag coefficient on orographic roughness
      cd_m = cd_m*(log(z_atm/rough_mom+1)/log(z_atm/rough_scale+1))**2
      ! surface layer drag coefficients
-     drag_t = cd_t * w_atm
      drag_m = cd_m * w_atm
 
      ! Apply suppression where the threshold is exceeded
-     where (avail_SWISHE .and. (es_thresh .ge. 2.5))
+     where (avail_SWISHE .and. suppress_flux_q .and. (es_thresh .ge. 2.5))
          !WY: first get the w_atm_q
          where(w_atm>w0_cddt)
              w_atm_q = wmin_ddt !WY: set to wmin_ddt if very strong wind speed (>w0_cddt)
-             swfq = 1
          elsewhere(w_atm>wcap_cddt)
              !WY: linearly decreases to 0 if w_atm between wcap_cddt and w0_cddt
-             w_atm_q = w_cddt - (w_atm - wcap_cddt)*(w_cddt - wmin_ddt)/(w0_cddt - wcap_cddt)
+             w_atm_q = w_cddt - (w_atm - wcap_cddt)*(w_cddt - wmin_ddt)/(w0_cddt - wcap_cddt) !WY: set to wmin_ddt if very strong wind speed (>w0_cddt)
          elsewhere(w_atm>w_cddt)
-             w_atm_q = w_cddt !WY: constant if w_atm between w_cddt and wcap_cddt
+             w_atm_q = w_cddt !WY: set to wmin_ddt if very strong wind speed (>w0_cddt)
          elsewhere
              w_atm_q = w_atm !WY: w_atm if w_atm<w_cddt
          endwhere
 
          ! Obtain SWISHE application frequency based on fraction of winds suppressed
          swfq = 1 - w_atm_q/w_atm
-
+         
          !WY: second, apply to warm SSTs
          where((t_surf0 - 273.15 - sst_cddt) .ge. 0)
              !WY: warm sst grids cap the evap wind speed
@@ -569,6 +568,37 @@ subroutine surface_flux_1d (                                           &
      elsewhere
          drag_q = cd_q * w_atm !WY: model's default over non-seawater grids
      endwhere
+   
+     where (avail_SWISHE .and. suppress_flux_t .and. (es_thresh .ge. 2.5))
+         !WY: first get the w_atm_t
+         where(w_atm>w0_cddt)
+             w_atm_t = wmin_ddt !WY: set to wmin_ddt if very strong wind speed (>w0_cddt)
+         elsewhere(w_atm>wcap_cddt)
+             !WY: linearly decreases to 0 if w_atm between wcap_cddt and w0_cddt
+             w_atm_t = w_cddt - (w_atm - wcap_cddt)*(w_cddt - wmin_ddt)/(w0_cddt - wcap_cddt) !WY: set to wmin_ddt if very strong wind speed (>w0_cddt)
+         elsewhere(w_atm>w_cddt)
+             w_atm_t = w_cddt !WY: set to wmin_ddt if very strong wind speed (>w0_cddt)
+         elsewhere
+             w_atm_t = w_atm !WY: w_atm if w_atm<w_cddt
+         endwhere
+
+         ! Obtain SWISHE application frequency based on fraction of winds suppressed
+         swfq = 1 - w_atm_t/w_atm
+
+         !WY: second, apply to warm SSTs
+         where((t_surf0 - 273.15 - sst_cddt) .ge. 0)
+             !WY: warm sst grids cap the shflx wind speed
+             !WY: apply w_atm_t to warm SSTs
+             drag_t = cd_q * w_atm_t
+         elsewhere
+             swfq = 0 ! set SWISHE application to 0 since it's not applied
+             drag_t = cd_t * w_atm !WY: cold sst grids use the default w_atm
+         endwhere
+     elsewhere
+         drag_t = cd_t * w_atm !WY: model's default over non-seawater grids
+     endwhere
+     
+
      ! End SWISHE flux suppression conditional
      
      ! density
