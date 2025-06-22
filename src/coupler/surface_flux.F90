@@ -272,6 +272,7 @@ logical :: raoult_sat_vap        = .false.
 logical :: do_simple             = .false.
 !WY: parameters used to kill TC by capping evap windspeed at w_cddt where
 !sst > sst_cddt. No cap where sst < sst_cddt - dsst_ddt. Taper in between.
+logical :: threshold_SST         = .false. ! GR: enables SWISHE condition based on SST
 logical :: suppress_flux_q       = .false. ! GR: enables suppression of evaporative flux (flux_q) under TC conditions
 logical :: suppress_flux_t       = .false. ! GR: enables suppression of sensible flux (flux_t) under TC conditions
 real    :: w_cddt                = 10.0 !WY: critical wind threshold in evap cap
@@ -292,6 +293,7 @@ namelist /surface_flux_nml/ no_neg_q,             &
                             ncar_ocean_flux_orig, &
                             raoult_sat_vap,       &
                             do_simple,            &
+                            threshold_SST,        &
                             suppress_flux_q,      &
                             suppress_flux_t,      &
                             w_cddt,               &
@@ -402,6 +404,7 @@ subroutine surface_flux_1d (                                           &
   integer :: i, nbad
   ! GR: addition of local variables relevant to flux suppression
   logical, dimension(size(avail)) :: avail_SWISHE !< .TRUE. when the SWISHE namelist option is enabled (`suppress_flux_q`), .FALSE. otherwise
+  logical, dimension(size(avail)) :: impose_SST_threshold !< .TRUE. when the `threshold_SST` namelist option is enabled, .FALSE. otherwise
   real, dimension(size(t_atm(:))) :: alpha !!WY: weight used in kill_tc taper
   real, dimension(size(t_atm(:))) :: w_atm_q, w_atm_t !!WY: modified w_atm used in drag_q
   alpha = 0.0 !WY: default is 0
@@ -530,6 +533,12 @@ subroutine surface_flux_1d (                                           &
   else
       avail_SWISHE = .false.
   end if
+  ! Set `impose_SST_threshold` if `threshold_SST` set to .TRUE.
+  if (threshold_SST) then
+      impose_SST_threshold = .true.
+  else
+      impose_SST_threshold = .false.
+  end if
   
   where (avail)
   
@@ -555,15 +564,19 @@ subroutine surface_flux_1d (                                           &
          ! Obtain SWISHE application frequency based on fraction of winds suppressed
          swfq = 1 - w_atm_q/w_atm
          
+         drag_q = cd_q * w_atm_q
+
          !WY: second, apply to warm SSTs
-         where((t_surf0 - 273.15 - sst_cddt) .ge. 0)
-             !WY: warm sst grids cap the evap wind speed
-             !drag_q = cd_q * min(w_cddt, w_atm)
-             !WY: apply w_atm_q to warm SSTs
-             drag_q = cd_q * w_atm_q
-         elsewhere
-             swfq = 0 ! set SWISHE application to 0 since it's not applied
-             drag_q = cd_q * w_atm !WY: cold sst grids use the default w_atm
+         where(impose_SST_threshold)
+             where(((t_surf0 - 273.15 - sst_cddt) .ge. 0))
+                 !WY: warm sst grids cap the evap wind speed
+                 !drag_q = cd_q * min(w_cddt, w_atm)
+                 !WY: apply w_atm_q to warm SSTs
+                 drag_q = cd_q * w_atm_q
+             elsewhere
+                 swfq = 0 ! set SWISHE application to 0 since it's not applied
+                 drag_q = cd_q * w_atm !WY: cold sst grids use the default w_atm
+             endwhere
          endwhere
      elsewhere
          drag_q = cd_q * w_atm !WY: model's default over non-seawater grids
@@ -585,14 +598,18 @@ subroutine surface_flux_1d (                                           &
          ! Obtain SWISHE application frequency based on fraction of winds suppressed
          swfq = 1 - w_atm_t/w_atm
 
+         drag_t = cd_q * w_atm_t
+
          !WY: second, apply to warm SSTs
-         where((t_surf0 - 273.15 - sst_cddt) .ge. 0)
-             !WY: warm sst grids cap the shflx wind speed
-             !WY: apply w_atm_t to warm SSTs
-             drag_t = cd_q * w_atm_t
-         elsewhere
-             swfq = 0 ! set SWISHE application to 0 since it's not applied
-             drag_t = cd_t * w_atm !WY: cold sst grids use the default w_atm
+         where(impose_SST_threshold)
+             where ((t_surf0 - 273.15 - sst_cddt) .ge. 0)
+                 !WY: warm sst grids cap the shflx wind speed
+                 !WY: apply w_atm_t to warm SSTs
+                 drag_t = cd_t * w_atm_t
+             elsewhere
+                 swfq = 0 ! set SWISHE application to 0 since it's not applied
+                 drag_t = cd_t * w_atm !WY: cold sst grids use the default w_atm
+             endwhere
          endwhere
      elsewhere
          drag_t = cd_t * w_atm !WY: model's default over non-seawater grids

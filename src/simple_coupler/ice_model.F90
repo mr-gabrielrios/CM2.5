@@ -637,6 +637,7 @@ endif
        trim(sst_method) /= 'aqua_planet_8'  .and. &
        trim(sst_method) /= 'aqua_planet_9'  .and. &
        trim(sst_method) /= 'aqua_planet_10'  .and. &
+       trim(sst_method) /= 'aqua_planet_11'  .and. &
        trim(sst_method) /= 'mixed_layer'    .and. &               !miz
        trim(sst_method) /= 'mixed_layer_data' .and. &             !miz
        trim(sst_method) /= 'mixed_layer_merlis' .and. &             !tmm
@@ -912,12 +913,13 @@ endif
     ! GR: begin definition of custom SST profiles
     ! -------------------------------------------------------------------------------------------
 
+    ! SST maximum centered at equator
     else if (sst_method == "aqua_planet_9") then
         ice_method = 'none'
         Ice%ice_mask = .false.
 
         ! Constants for SST profile shift
-        min_SST = 0.
+        min_SST = 0. ! minimum SST is chosen to be 7K lower than the peak, per Hsieh et al. (2020) 
         max_SST = 29. ! taken from HadISST zonal mean SST maximum, see hadisst_sst.clim.1986-2005.nc
         period = 1.25
         meridional_offset = 0 * pi / 180. ! convert from degrees to radians
@@ -926,28 +928,49 @@ endif
        
         do j = js, je
             do i = is, ie
-                Ice%t_surf(i, j) = merge(max_SST * (1 - sin(period * Ice%lat(i, j) - meridional_offset)**4) + TFREEZE, & 
-                                         min_SST + TFREEZE, &
+                Ice%t_surf(i, j) = merge((max_SST - min_SST) * (1 - sin(period * Ice%lat(i, j) - meridional_offset)**4) + min_SST + TFREEZE, & 
+                                          min_SST + TFREEZE, &
                                          ((Ice%lat(i, j) .ge. root_min) .and. (Ice%lat(i, j) .le. root_max))) 
             enddo
         enddo
     
+    ! SST maximum centered at 10 N
     else if (sst_method == "aqua_planet_10") then
         ice_method = 'none'
         Ice%ice_mask = .false.
 
         ! Constants for SST profile shift
-        min_SST = 0.
+        min_SST = 0. ! minimum SST is chosen to be 7K lower than the peak, per Hsieh et al. (2020) 
         max_SST = 29. ! taken from HadISST zonal mean SST maximum, see hadisst_sst.clim.1986-2005.nc
         period = 1.25
-        meridional_offset = 10 * pi / 180. ! convert from degrees to radians
+        meridional_offset = 0 * pi / 180. ! convert from degrees to radians
         root_min = (-(pi / 2) + meridional_offset) / period ! calculate minimum root (where SST = 0 degC)
         root_max = ((pi / 2) + meridional_offset) / period ! calculate maximum root for filtering (where SST = 0 degC)
        
         do j = js, je
             do i = is, ie
-                Ice%t_surf(i, j) = merge(max_SST * (1 - sin(period * Ice%lat(i, j) - meridional_offset)**4) + TFREEZE, & 
-                                         min_SST + TFREEZE, &
+                Ice%t_surf(i, j) = merge((max_SST - min_SST) * (1 - sin(period * Ice%lat(i, j) - meridional_offset)**4) + min_SST + TFREEZE, & 
+                                          min_SST + TFREEZE, &
+                                         ((Ice%lat(i, j) .ge. root_min) .and. (Ice%lat(i, j) .le. root_max))) 
+            enddo
+        enddo
+
+    else if (sst_method == "aqua_planet_11") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+
+        ! Constants for SST profile shift
+        min_SST = 22. ! minimum SST is chosen to be 7K lower than the peak, per Hsieh et al. (2020) 
+        max_SST = 29. ! taken from HadISST zonal mean SST maximum, see hadisst_sst.clim.1986-2005.nc
+        period = 1.1
+        meridional_offset = 0 * pi / 180. ! convert from degrees to radians
+        root_min = (-(pi / 2) + meridional_offset) / period ! calculate minimum root (where SST = 0 degC)
+        root_max = ((pi / 2) + meridional_offset) / period ! calculate maximum root for filtering (where SST = 0 degC)
+       
+        do j = js, je
+            do i = is, ie
+                Ice%t_surf(i, j) = merge((max_SST - min_SST) * (1 - sin(period * Ice%lat(i, j) - meridional_offset)**100) + min_SST + TFREEZE, & 
+                                          min_SST + TFREEZE, &
                                          ((Ice%lat(i, j) .ge. root_min) .and. (Ice%lat(i, j) .le. root_max))) 
             enddo
         enddo
