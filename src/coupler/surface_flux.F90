@@ -275,12 +275,22 @@ logical :: do_simple             = .false.
 logical :: threshold_SST         = .false. ! GR: enables SWISHE condition based on SST
 logical :: suppress_flux_q       = .false. ! GR: enables suppression of evaporative flux (flux_q) under TC conditions
 logical :: suppress_flux_t       = .false. ! GR: enables suppression of sensible flux (flux_t) under TC conditions
-real    :: w_cddt                = 10.0 !WY: critical wind threshold in evap cap
+real    :: w_cddt                = 7.5 !WY: critical wind threshold in evap cap
 real    :: wcap_cddt             = 12.0 !WY: critical wind threshold in evap cap, windspeed capped if >w_cddt and <w0_cddt
 real    :: w0_cddt               = 15.0 !WY: critical wind threshold in evap cap, windspeed=0 if >=w0_cddt
 real    :: wmin_ddt              = 0.0 !WY: minimum w_atm to be set if>w0_cddt
 real    :: sst_cddt              = 25.0 !WY: critical sst threshold in evap cap
 real    :: dsst_ddt              = 1.0 !WY: sst taper width in evap cap
+
+real    :: weight_rh500          = 0.5
+real    :: weight_rh700          = 0.5
+real    :: weight_rh850          = 0.5
+real    :: weight_vort850        = 1.0
+real    :: threshold_rh500       = 60
+real    :: threshold_rh700       = 70
+real    :: threshold_rh850       = 75
+real    :: threshold_vort850     = 1.e-4
+real    :: weight_sum            = 2.5
 
 namelist /surface_flux_nml/ no_neg_q,             &
                             use_virtual_temp,     &
@@ -301,7 +311,16 @@ namelist /surface_flux_nml/ no_neg_q,             &
                             w0_cddt,              &
                             wmin_ddt,             &
                             sst_cddt,             &
-                            dsst_ddt
+                            dsst_ddt,             &
+                            weight_rh500        , &   
+                            weight_rh700        , &
+                            weight_rh850        , &
+                            weight_vort850      , &
+                            threshold_rh500     , &
+                            threshold_rh700     , &
+                            threshold_rh850     , &
+                            threshold_vort850   , &
+                            weight_sum          
    
 
 
@@ -515,10 +534,10 @@ subroutine surface_flux_1d (                                           &
                              seawater, cd_m, cd_t, cd_q, u_star, b_star     )
   end if
   
-  rh500_weighted      = merge(0.5, 0.0, (rh500 .ge. 60))
-  rh700_weighted      = merge(1.0, 0.0, (rh700 .ge. 70))
-  rh850_weighted      = merge(1.0, 0.0, (rh850 .ge. 75))
-  vort850_weighted    = merge(0.5, 0.0, (abs(vort850) .ge. 1e-4))
+  rh500_weighted      = merge(weight_rh500,   0.0, (rh500 .ge. threshold_rh500))
+  rh700_weighted      = merge(weight_rh700,   0.0, (rh700 .ge. threshold_rh700))
+  rh850_weighted      = merge(weight_rh850,   0.0, (rh850 .ge. threshold_rh850))
+  vort850_weighted    = merge(weight_vort850, 0.0, (abs(vort850) .ge. threshold_vort850))
   do i = 1, size(rh500_weighted)
       es_thresh(i)    = rh500_weighted(i) + rh700_weighted(i) &
                         + rh850_weighted(i) + vort850_weighted(i) 
@@ -548,7 +567,7 @@ subroutine surface_flux_1d (                                           &
      drag_m = cd_m * w_atm
 
      ! Apply suppression where the threshold is exceeded
-     where (avail_SWISHE .and. suppress_flux_q .and. (es_thresh .ge. 2.5))
+     where (avail_SWISHE .and. suppress_flux_q .and. (es_thresh .ge. weight_sum))
          !WY: first get the w_atm_q
          where(w_atm>w0_cddt)
              w_atm_q = wmin_ddt !WY: set to wmin_ddt if very strong wind speed (>w0_cddt)
@@ -568,21 +587,22 @@ subroutine surface_flux_1d (                                           &
 
          !WY: second, apply to warm SSTs
          where(impose_SST_threshold)
-             where(((t_surf0 - 273.15 - sst_cddt) .ge. 0))
-                 !WY: warm sst grids cap the evap wind speed
-                 !drag_q = cd_q * min(w_cddt, w_atm)
-                 !WY: apply w_atm_q to warm SSTs
+             where((t_surf0 - 273.15 - sst_cddt) .ge. 0)
                  drag_q = cd_q * w_atm_q
-             elsewhere
+             elsewhere ((t_surf0 - 273.15 - sst_cddt + dsst_ddt) .le. 0)
                  swfq = 0 ! set SWISHE application to 0 since it's not applied
                  drag_q = cd_q * w_atm !WY: cold sst grids use the default w_atm
+             elsewhere
+                 alpha = (t_surf0 - 273.15 - sst_cddt + dsst_ddt)/dsst_ddt
+                 swfq = alpha * swfq
+                 drag_q = cd_q * (alpha*w_atm_q + (1-alpha)*w_atm )
              endwhere
          endwhere
      elsewhere
          drag_q = cd_q * w_atm !WY: model's default over non-seawater grids
      endwhere
    
-     where (avail_SWISHE .and. suppress_flux_t .and. (es_thresh .ge. 2.5))
+     where (avail_SWISHE .and. suppress_flux_t .and. (es_thresh .ge. weight_sum))
          !WY: first get the w_atm_t
          where(w_atm>w0_cddt)
              w_atm_t = wmin_ddt !WY: set to wmin_ddt if very strong wind speed (>w0_cddt)
@@ -602,13 +622,15 @@ subroutine surface_flux_1d (                                           &
 
          !WY: second, apply to warm SSTs
          where(impose_SST_threshold)
-             where ((t_surf0 - 273.15 - sst_cddt) .ge. 0)
-                 !WY: warm sst grids cap the shflx wind speed
-                 !WY: apply w_atm_t to warm SSTs
+             where((t_surf0 - 273.15 - sst_cddt) .ge. 0)
                  drag_t = cd_t * w_atm_t
-             elsewhere
+             elsewhere ((t_surf0 - 273.15 - sst_cddt + dsst_ddt) .le. 0)
                  swfq = 0 ! set SWISHE application to 0 since it's not applied
                  drag_t = cd_t * w_atm !WY: cold sst grids use the default w_atm
+             elsewhere
+                 alpha = (t_surf0 - 273.15 - sst_cddt + dsst_ddt)/dsst_ddt
+                 swfq = alpha * swfq
+                 drag_t = cd_t * (alpha*w_atm_t + (1-alpha)*w_atm )
              endwhere
          endwhere
      elsewhere
