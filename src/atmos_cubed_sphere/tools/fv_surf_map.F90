@@ -169,11 +169,15 @@
           if (status .ne. NF_NOERR) call handle_err(status)
           nlon = londim
 
+          write(*, *) 'Longitude read in for surf_file.'
+
           status = nf_inq_dimid (ncid, 'lat', latid)
           if (status .ne. NF_NOERR) call handle_err(status)
           status = nf_inq_dimlen (ncid, latid, latdim)
           if (status .ne. NF_NOERR) call handle_err(status)
           nlat = latdim
+
+          write(*, *) 'Latitude read in for surf_file.'
 
           if ( is_master() ) then
               if ( nlon==43200 ) then
